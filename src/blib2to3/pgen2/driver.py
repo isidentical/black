@@ -37,8 +37,63 @@ from . import grammar, parse, token, tokenize, pgen
 from logging import Logger
 from blib2to3.pytree import _Convert, NL
 from blib2to3.pgen2.grammar import Grammar
+from contextlib import contextmanager
 
 Path = Union[str, "os.PathLike[str]"]
+
+class _TokenGeneratorProxy:
+    def __init__(self, generator):
+        self._tokens = generator
+        self._counter = 0
+        self._release_ranges = []
+
+    @contextmanager
+    def release(self):
+        self._release_ranges.append([self._counter, None, []])
+        try:
+            yield self
+        finally:
+            # Lock the last release range to the final position that
+            # has been eaten.
+            total_eaten = len(self._release_ranges[-1][2])
+            self._release_ranges[-1][1] = self._counter + total_eaten
+
+    def eat(self, point):
+        eaten_tokens = self._release_ranges[-1][2]
+        if point < len(eaten_tokens):
+            return eaten_tokens[point]
+        else:
+            while point >= len(eaten_tokens):
+                token = next(self._tokens)
+                eaten_tokens.append(token)
+            return token
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        # If the current position is already compromised (looked up)
+        # return the eaten token, if not just go further on the given
+        # token producer.
+        for start, end, tokens in self._release_ranges:
+            assert end is not None
+            if start <= self._counter < end:
+                token = tokens[self._counter - start]
+                break
+        else:
+            token = next(self._tokens)
+        self._counter += 1
+        return token
+
+    def can_advance(self, to):
+        # Try to eat, fail if it can't. The eat operation is cached
+        # so there wont be any additional cost of eating here
+        try:
+            self.eat(to)
+        except StopIteration:
+            return False
+        else:
+            return True
 
 
 class Driver(object):
@@ -57,14 +112,18 @@ class Driver(object):
     def parse_tokens(self, tokens: Iterable[Any], debug: bool = False) -> NL:
         """Parse a series of tokens and return the syntax tree."""
         # XXX Move the prefix computation into a wrapper around tokenize.
+        proxy = _TokenGeneratorProxy(tokens)
+
         p = parse.Parser(self.grammar, self.convert)
-        p.setup()
+        p.setup(proxy=proxy)
+
         lineno = 1
         column = 0
         indent_columns = []
         type = value = start = end = line_text = None
         prefix = ""
-        for quintuple in tokens:
+
+        for quintuple in proxy:
             type, value, start, end, line_text = quintuple
             if start != (lineno, column):
                 assert (lineno, column) <= start, ((lineno, column), start)

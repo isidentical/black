@@ -264,7 +264,6 @@ class Node(Base):
         self.type = type
         self.children = list(children)
         for ch in self.children:
-            assert ch.parent is None, repr(ch)
             ch.parent = self
         self.invalidate_sibling_maps()
         if prefix is not None:

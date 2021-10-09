@@ -78,7 +78,8 @@ def lib2to3_parse(src_txt: str, target_versions: Iterable[TargetVersion] = ()) -
     if not src_txt.endswith("\n"):
         src_txt += "\n"
 
-    for grammar in get_grammars(set(target_versions)):
+    grammars = [pygram.python_grammar]
+    for grammar in grammars:
         drv = driver.Driver(grammar, pytree.convert)
         try:
             result = drv.parse_string(src_txt, True)
